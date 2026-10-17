@@ -258,6 +258,7 @@ confirm_window! {
     arch_write_spend_ns,
     arch_write_htxs_ns,
     arch_write_txstat_ns,
+    arch_write_overlay_ns,
     arch_write_flush_ns,
     arch_write_blocks,
     // lookup wave
@@ -487,6 +488,10 @@ impl ConfirmStats {
 
     pub fn note_write_txstat(&self, ns: u64) {
         add(&self.arch_write_txstat_ns, ns);
+    }
+
+    pub fn note_write_overlay(&self, ns: u64) {
+        add(&self.arch_write_overlay_ns, ns);
     }
 
     fn miss_on_code(on: Option<&str>) -> u64 {

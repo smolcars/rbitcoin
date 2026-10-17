@@ -374,31 +374,27 @@ impl ArchiveWritePlan {
         Self::create_in_header_ranges(&self.per_header_ranges, spend, create_id)
     }
 
-    /// Per-packed-row `(vout, spend_fk)` for creates in this plan (Class A overlay).
+    /// Per-packed-row `(vout, spend_fk, vin)` for creates in this plan (Class A overlay).
     ///
-    /// Coinbase / external parents are omitted — those slots stay zero until
-    /// annotate after tip.
+    /// `planned_fks` is the contiguous append range, so a create's row is its
+    /// offset from the first fk. Coinbase / external parents are omitted —
+    /// those slots stay zero until annotate after tip.
     pub fn same_batch_spent_overlay(&self) -> Vec<Vec<(u32, Fk, u32)>> {
         let mut overlay: Vec<Vec<(u32, Fk, u32)>> = vec![Vec::new(); self.packed.len()];
-        if overlay.is_empty() {
+        let Some(first) = self.planned_fks.first().and_then(|fk| fk.get()) else {
             return overlay;
-        }
-        let mut idx: crate::U64Map<usize> = crate::U64Map::default();
-        for (i, fk) in self.planned_fks.iter().enumerate() {
-            if let Some(id) = fk.get() {
-                idx.insert(id, i);
-            }
-        }
-        for eds in self.edges.values() {
-            for e in eds {
-                let Some(cid) = e.create_fk.get() else {
-                    continue;
-                };
-                let Some(&i) = idx.get(&cid) else {
-                    continue;
-                };
-                overlay[i].push((e.vout, e.spend_fk, e.vin));
-            }
+        };
+        for e in self.edges.values().flatten() {
+            let Some(row) = e
+                .create_fk
+                .get()
+                .and_then(|cid| cid.checked_sub(first))
+                .and_then(|i| usize::try_from(i).ok())
+                .and_then(|i| overlay.get_mut(i))
+            else {
+                continue;
+            };
+            row.push((e.vout, e.spend_fk, e.vin));
         }
         overlay
     }
@@ -1354,6 +1350,16 @@ impl Query {
         if !plan.retain_headers_needing_body(|hfk| self.store.header_txs.has_body(hfk))? {
             return Ok((false, Vec::new()));
         }
+        let next = self.store.txs.count().saturating_add(1);
+        if plan.planned_fks.len() != plan.packed.len()
+            || !(0u64..)
+                .zip(&plan.planned_fks)
+                .all(|(i, fk)| fk.0 == next.saturating_add(i))
+        {
+            return Err(StoreError::Corrupt(
+                "tx put_full_batch fk mismatch (plan not committed in order)",
+            ));
+        }
         let edge_rows = commit_input_edge_rows(&plan)?;
         let seqsigwit_est = seqsigwit_append_est(&plan);
         let t0 = Instant::now();
@@ -1367,9 +1373,12 @@ impl Query {
 
         let t = Instant::now();
         let overlay = plan.same_batch_spent_overlay();
+        self.confirm_stats()
+            .note_write_overlay(t.elapsed().as_nanos() as u64);
+        let t = Instant::now();
         let txstat = stamp_txstat_rows(&plan)?;
-        let txstat_ns = t.elapsed().as_nanos() as u64;
-        self.confirm_stats().note_write_txstat(txstat_ns);
+        self.confirm_stats()
+            .note_write_txstat(t.elapsed().as_nanos() as u64);
 
         let t = Instant::now();
         let secret = self.store.txs.store_secret().clone();
@@ -1390,11 +1399,6 @@ impl Query {
         }
         if loc.len() != got_tx_fks.len() {
             return Err(StoreError::Corrupt("invariant: append loc length"));
-        }
-        if got_tx_fks != plan.planned_fks {
-            return Err(StoreError::Corrupt(
-                "tx put_full_batch fk mismatch (plan not committed in order)",
-            ));
         }
         if self.prune_seqsigwit() {
             let ins = seqsigwit_rows_for_prune(&mut plan)?;
@@ -1778,6 +1782,24 @@ mod tests {
         assert_eq!(q.tx_body_count(), 3);
         commit_stamped(&q, plan_b).unwrap();
         assert_eq!(q.tx_body_count(), 4);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn commit_refuses_out_of_order_plan_before_append() {
+        let (dir, q) = temp_query("plan-out-of-order");
+        let empty = crate::InFlight::new();
+        let need_a = vec![(Fk(10), vec![coinbase_apply(10)])];
+        let plan_a = plan_applies(&q, &need_a, 1, &empty, None).unwrap();
+        let need_b = vec![(Fk(20), vec![coinbase_apply(20)])];
+        let plan_b = plan_applies(&q, &need_b, 2, &empty, None).unwrap();
+
+        let err = commit_stamped(&q, plan_b).unwrap_err();
+        assert!(err.to_string().contains("not committed in order"), "{err}");
+        assert_eq!(q.tx_body_count(), 0, "refused plan must not append");
+        commit_stamped(&q, plan_a).unwrap();
+        assert_eq!(q.tx_body_count(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2687,7 +2709,7 @@ mod tests {
         );
         let mut records = crate::ArchiveWritePlan::empty();
         records.packed.push((pin, Vec::new()));
-        records.planned_fks.push(Fk(9));
+        records.planned_fks.push(Fk(q.tx_body_count() + 1));
         match q.archive_commit_plan(records) {
             Err(e) => {
                 let s = e.to_string();
