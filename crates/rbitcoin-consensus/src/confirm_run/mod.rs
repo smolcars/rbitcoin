@@ -101,7 +101,7 @@ struct BodyMeta {
     header_rec: rbitcoin_store::HeaderRecord,
     tx_fks: Vec<rbitcoin_primitives::Fk>,
     /// Create txids for this block — **exactly one** `compute_txid` per entry
-    /// at structure/entry (plan or archived load). Assemble must use these only.
+    /// at structure/entry (plan or archived load), reused through ordered write.
     txids: Vec<[u8; 32]>,
     /// Same walk as `txids` (lookup/structure). Script jobs reuse these.
     pres: std::sync::Arc<[rbitcoin_query::TxPrecompute]>,
@@ -109,6 +109,7 @@ struct BodyMeta {
 
 /// Assemble output for one height (held through scripts → write).
 struct Prepared {
+    txids: Vec<[u8; 32]>,
     height: Height,
     header_fk: rbitcoin_primitives::Fk,
     tx_fks: Vec<rbitcoin_primitives::Fk>,

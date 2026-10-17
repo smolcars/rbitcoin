@@ -812,6 +812,11 @@ mod tests {
         }
         let block = bare_block(txs);
         let prep = Prepared {
+            txids: block
+                .txdata
+                .iter()
+                .map(|tx| tx.compute_txid().to_byte_array())
+                .collect(),
             height: Height(height),
             header_fk: Fk(7 + u64::from(height)),
             tx_fks,

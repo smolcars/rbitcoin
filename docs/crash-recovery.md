@@ -93,6 +93,8 @@ Open revalidation runs in `Query::open_or_create` **before** P2P can extend tip.
 
 Clean shutdown: `flush_for_shutdown` fsyncs tip/Class C (incl. L2 dirty images) then async Class A.
 Steady path: payload pwrite + HWM publish; `sync_data` on flush barriers.
+Scripthash mutation owners write their allocator headers before returning successfully; flush
+syncs those writes without rewriting unchanged allocator headers.
 Kill mid-payload before HWM publish: readers never see past previous published length.
 
 Connect barrier (`flush_class_c_tip`): headers (if dirty) → strong → header_txs → **confirmed last** → soft `tip_seal` (tmp + `sync_all` + rename + parent-directory `fsync`). The height fence is RAM-only and is not flushed. The barrier does not `sync_data` Class A.

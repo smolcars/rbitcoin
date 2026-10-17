@@ -343,7 +343,30 @@ fn script_hash_record_helpers_and_table_flush_open() {
     let _ = put_create_batch(&t, &[] as &[ScriptHashRecord]);
     assert_eq!(t.entry_count(), 1);
     t.flush().unwrap();
+    let bodies: Vec<_> = t.bodies.iter().chain(t.ovf_body.iter()).collect();
+    let unchanged = std::time::UNIX_EPOCH + std::time::Duration::from_secs(60);
+    for body in &bodies {
+        std::fs::File::options()
+            .write(true)
+            .open(body.path())
+            .unwrap()
+            .set_modified(unchanged)
+            .unwrap();
+    }
+    t.flush().unwrap();
+    for body in &bodies {
+        assert_eq!(
+            std::fs::metadata(body.path()).unwrap().modified().unwrap(),
+            unchanged
+        );
+    }
     t.flush_async().unwrap();
+    for body in t.bodies.iter().chain(t.ovf_body.iter()) {
+        assert!(
+            !body.pending_sync(),
+            "flushing an unchanged allocator must not dirty its body again"
+        );
+    }
     drop(t);
     let t = ScriptHashTable::open_tiny(&dir).unwrap();
     assert_eq!(t.entries(&sh).unwrap().len(), 1);

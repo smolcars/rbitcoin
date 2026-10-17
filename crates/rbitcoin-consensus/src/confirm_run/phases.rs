@@ -215,6 +215,7 @@ pub(super) fn assemble_run(
         trim_mtp_window(&mut time_window);
 
         prepared.push(Prepared {
+            txids: meta.txids,
             height,
             header_fk: meta.header_fk,
             tx_fks: meta.tx_fks,
@@ -281,7 +282,7 @@ pub(super) fn structural_run(
             query,
             wire_blocks[i].as_ref(),
             &ctx,
-            Some(&p.tx_fks),
+            &p.txids,
             &p.spends,
             p.fees,
             &mut reuse.pending,
@@ -526,6 +527,7 @@ mod tests {
             hash: BlockHash::from_byte_array([0xcd; 32]),
         }];
         let prev = Prepared {
+            txids: Vec::new(),
             height: Height(1),
             header_fk: Fk(1),
             tx_fks: Vec::new(),

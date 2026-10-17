@@ -1698,7 +1698,7 @@ pub(crate) fn structural_validate_spends(
     query: &Query,
     block: &Block,
     ctx: &ValidationContext<'_>,
-    archived_tx_fks: Option<&[rbitcoin_primitives::Fk]>,
+    create_txids: &[[u8; 32]],
     spends: &[(
         [u8; 32],
         u32,
@@ -1721,7 +1721,7 @@ pub(crate) fn structural_validate_spends(
     let maturity = ctx.params.coinbase_maturity();
     // BIP30's txid batch is inside `spent_ns` (signet runs it on every block).
     let t_spent = Instant::now();
-    reject_bip30_unspent_overwrite(query, block, ctx)?;
+    reject_bip30_unspent_overwrite(query, block, ctx, create_txids)?;
     let t_abs = Instant::now();
     structural_abs_heights(query, run_create_height, scratch, abs_jobs)?;
     let tip = query.tip_height().map(|h| h.0);
@@ -1759,7 +1759,6 @@ pub(crate) fn structural_validate_spends(
         mtp_cache,
     )?;
     let bip68_ns = t_bip68.elapsed().as_nanos() as u64;
-    let _ = archived_tx_fks;
     check_coinbase_subsidy(block, ctx, fees)?;
     Ok(StructuralPhaseNs {
         spent_ns,
@@ -2263,20 +2262,21 @@ fn reject_bip30_unspent_overwrite(
     query: &Query,
     block: &Block,
     ctx: &ValidationContext<'_>,
+    create_txids: &[[u8; 32]],
 ) -> Result<(), ConsensusError> {
+    if create_txids.len() != block.txdata.len() {
+        return Err(ConsensusError::Store(rbitcoin_store::StoreError::Corrupt(
+            "invariant: write create txids length",
+        )));
+    }
     if ctx.params.is_bip30_repeat(ctx.height.0, block.block_hash())
         || bip34_ancestry_skips_bip30(query, ctx)
     {
         return Ok(());
     }
-    let create_txids: Vec<[u8; 32]> = block
-        .txdata
-        .iter()
-        .map(|tx| tx.compute_txid().to_byte_array())
-        .collect();
     let hits = query
         .store()
-        .get_fk_by_txid_batch(&create_txids)
+        .get_fk_by_txid_batch(create_txids)
         .map_err(ConsensusError::from)?;
     for (_txid, row) in hits {
         let Some((old_fk, _)) = row else {

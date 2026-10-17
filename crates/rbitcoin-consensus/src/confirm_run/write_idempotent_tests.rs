@@ -69,6 +69,7 @@ fn script_ok_append_contiguous_and_gap() {
 
     fn empty_prepared(h: u32, hash_byte: u8) -> Prepared {
         Prepared {
+            txids: Vec::new(),
             height: Height(h),
             header_fk: Fk(h as u64),
             tx_fks: vec![],
@@ -371,6 +372,7 @@ fn prepared_at(
     use bitcoin::CompactTarget;
     use rbitcoin_primitives::{Fk, Height};
     super::Prepared {
+        txids: Vec::new(),
         height: Height(height),
         header_fk: Fk(1),
         tx_fks: Vec::new(),
@@ -772,6 +774,7 @@ fn script_wave_skips_preverified_txids() {
         crate::block::ScriptVerifyFlags::buried(true, true, true, true, true),
     );
     let prepared = Prepared {
+        txids: Vec::new(),
         height: Height(1),
         header_fk: Fk(1),
         tx_fks: vec![Fk(1)],
@@ -891,6 +894,7 @@ fn pin_and_ensure_journey() {
     );
 
     let prepared_miss = [Prepared {
+        txids: Vec::new(),
         height: Height(1),
         header_fk: Fk(1),
         tx_fks: vec![Fk(10)],
@@ -997,6 +1001,7 @@ fn pin_and_ensure_journey() {
     );
     assert!(!bp.has_abs_layout(pfk));
     let prepared = [Prepared {
+        txids: Vec::new(),
         height: Height(1),
         header_fk: Fk(1),
         tx_fks: vec![Fk(2)],
@@ -1027,6 +1032,7 @@ fn pin_and_ensure_journey() {
         .put_tx_full_batch_indexed(&[(cold_tx.clone(), cold_ins, cold_outs)], true)
         .unwrap()[0];
     let prepared_cold = [Prepared {
+        txids: Vec::new(),
         height: Height(1),
         header_fk: Fk(1),
         tx_fks: vec![Fk(3)],
@@ -1133,6 +1139,7 @@ fn pin_and_ensure_journey() {
     assert!(bp_ghost.contains(ghost));
     assert!(!bp_ghost.has_abs_layout(ghost));
     let prepared_ghost = [Prepared {
+        txids: Vec::new(),
         height: Height(1),
         header_fk: Fk(1),
         tx_fks: vec![Fk(4)],
@@ -1206,6 +1213,7 @@ fn fill_same_batch_abs_from_append_loc_ram() {
     assert_eq!(loc[0].n_out, 1);
 
     let prepared = [Prepared {
+        txids: Vec::new(),
         height: Height(1),
         header_fk: Fk(1),
         tx_fks: fks.clone(),
@@ -1254,6 +1262,7 @@ fn fill_same_batch_abs_from_append_loc_ram() {
         n_out: 1,
     };
     let multi_prepared = [Prepared {
+        txids: Vec::new(),
         height: Height(1),
         header_fk: Fk(1),
         tx_fks: vec![multi_fk],
@@ -1295,6 +1304,7 @@ fn fill_same_batch_abs_from_append_loc_ram() {
     );
     assert!(!bp_later.has_abs_layout(fks[0]));
     let later = [Prepared {
+        txids: Vec::new(),
         height: Height(2),
         header_fk: Fk(2),
         tx_fks: vec![Fk(3)],
@@ -1488,7 +1498,11 @@ fn structural_same_batch_overlay_skips_meta_pread() {
         &q,
         &block,
         &ctx,
-        Some(&fks),
+        &block
+            .txdata
+            .iter()
+            .map(|tx| tx.compute_txid().to_byte_array())
+            .collect::<Vec<_>>(),
         &spends,
         0,
         &mut pending,
@@ -1643,7 +1657,11 @@ fn structural_scratch_second_block_does_not_replay_first_slots() {
             &q,
             &block,
             &ctx,
-            None,
+            &block
+                .txdata
+                .iter()
+                .map(|tx| tx.compute_txid().to_byte_array())
+                .collect::<Vec<_>>(),
             &spends,
             0,
             &mut pending,
@@ -1765,6 +1783,7 @@ fn fill_just_written_survives_until_last_started_write() {
         Vec::new(),
     );
     let child = [Prepared {
+        txids: Vec::new(),
         height: Height(496),
         header_fk: Fk(2),
         tx_fks: vec![Fk(3)],
@@ -1850,6 +1869,7 @@ fn fill_stamp_spent_hole_from_write_tls() {
         Vec::new(),
     );
     let child = [Prepared {
+        txids: Vec::new(),
         height: Height(133_433),
         header_fk: Fk(2),
         tx_fks: vec![Fk(3)],
@@ -1942,6 +1962,7 @@ fn pin_and_ensure_from_pin_loc_without_tls() {
     let (parents, _) = pin_for_wire_batch(&q, Some(&plan), &mut stamp, &[], &[], Some(&inflight))
         .expect("pin from CreatePin outs + stamp loc");
     let child = [Prepared {
+        txids: Vec::new(),
         height: Height(2),
         header_fk: Fk(2),
         tx_fks: vec![Fk(2)],
@@ -3207,6 +3228,7 @@ fn collect_spend_abs_after_fill_is_one_walk() {
 
     let bits = bitcoin::CompactTarget::from_consensus(0x207f_ffff);
     let prepared_ok = [Prepared {
+        txids: Vec::new(),
         height: Height(1),
         header_fk: Fk(1),
         tx_fks: vec![Fk(9)],
@@ -3236,6 +3258,7 @@ fn collect_spend_abs_after_fill_is_one_walk() {
     );
 
     let prepared_miss = [Prepared {
+        txids: Vec::new(),
         height: Height(1),
         header_fk: Fk(1),
         tx_fks: vec![Fk(9)],
@@ -3357,6 +3380,11 @@ fn structural_run_clears_reused_scratch_between_batches() {
     let params = ChainParams::regtest();
     let bits = CompactTarget::from_consensus(0x207f_ffff);
     let prepared = [Prepared {
+        txids: block
+            .txdata
+            .iter()
+            .map(|tx| tx.compute_txid().to_byte_array())
+            .collect(),
         height: Height(1),
         header_fk: Fk(100),
         tx_fks: vec![Fk(9)],

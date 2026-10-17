@@ -1020,18 +1020,6 @@ impl ScriptHashTable {
         Ok(())
     }
 
-    fn persist_all_allocs(&self) -> Result<(), StoreError> {
-        for (i, body) in self.bodies.iter().enumerate() {
-            let g = self.allocs[i].lock().unwrap();
-            write_alloc_header(body, &g)?;
-        }
-        if let (Some(ovf), Some(oa)) = (&self.ovf_body, &self.ovf_alloc) {
-            let g = oa.lock().unwrap();
-            write_alloc_header(ovf, &g)?;
-        }
-        Ok(())
-    }
-
     fn flush_all_bodies(&self) -> Result<(), StoreError> {
         for b in &self.bodies {
             b.flush()?;
@@ -2347,7 +2335,6 @@ impl ScriptHashTable {
     }
 
     pub fn flush(&self) -> Result<(), StoreError> {
-        self.persist_all_allocs()?;
         self.flush_all_bodies()?;
         self.ingest.lock().unwrap().flush()?;
         for slot in self.sorted_main.iter() {
@@ -2365,7 +2352,6 @@ impl ScriptHashTable {
     }
 
     pub fn flush_async(&self) -> Result<(), StoreError> {
-        self.persist_all_allocs()?;
         self.flush_all_bodies_async()?;
         self.ingest.lock().unwrap().flush_async()?;
         for h in self.sealed_ovf.lock().unwrap().iter() {

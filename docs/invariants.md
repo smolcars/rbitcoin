@@ -65,6 +65,11 @@ puts parent P on the load-batch skeleton, load stamp of a child spending P has
 **zero** leftover TipOnly for P (`head_need_n=0`). Pack stays on load; do not
 move `plan_batch` onto lookup.
 
+The existing create-txid vector moves from assembly through scripts to ordered
+BIP30 validation, which requires one identity per wire transaction. Keeping
+32 bytes per create for the bounded write queue avoids rehashing transactions
+on the sole writer; it does not add another vector copy.
+
 IBD stamp does not build `TxApply`. Wire rows may leave packed `ins` empty.
 Write encodes seqsigwit from the wire transaction and SpendEdges. A records
 row with empty ins is `Corrupt("invariant: packed ins empty at write")`.

@@ -367,7 +367,10 @@ fn rejects_unspent_overwrite(q: &rbitcoin_query::Query, first: &Transaction) {
             q,
             &dup,
             &ctx,
-            Some(&[Fk(2)]),
+            &dup.txdata
+                .iter()
+                .map(|tx| tx.compute_txid().to_byte_array())
+                .collect::<Vec<_>>(),
             &[],
             0,
             &mut OutPointSet::default(),
@@ -484,7 +487,11 @@ fn bip30_message_at_mainnet_above_bip34(
         q,
         block,
         &ctx,
-        Some(&[Fk(2)]),
+        &block
+            .txdata
+            .iter()
+            .map(|tx| tx.compute_txid().to_byte_array())
+            .collect::<Vec<_>>(),
         &[],
         0,
         &mut OutPointSet::default(),
@@ -1931,7 +1938,8 @@ fn bip30_ignores_unspendable_outputs() {
     ];
     let (path, q, first, fk) = plant_coinbase_with_outputs("bip30-unspendable", outputs);
     let dup = block_with(vec![first.clone()]);
-    let check = |q: &rbitcoin_query::Query| {
+    let txids = [first.compute_txid().to_byte_array()];
+    let check = |q: &rbitcoin_query::Query, identities_present: bool| {
         let mut mtp_cache = U32Map::default();
         mtp_cache.insert(9, 0);
         let parents = BatchParents::new();
@@ -1947,7 +1955,7 @@ fn bip30_ignores_unspendable_outputs() {
             q,
             &dup,
             &ctx_h(10),
-            Some(&[rbitcoin_primitives::Fk(3)]),
+            if identities_present { &txids } else { &[] },
             &[],
             0,
             &mut OutPointSet::default(),
@@ -1963,14 +1971,18 @@ fn bip30_ignores_unspendable_outputs() {
         .unwrap_or_default()
     };
     assert!(
-        check(&q).contains("bad-txns-BIP30"),
+        check(&q, true).contains("bad-txns-BIP30"),
         "a spendable unspent output must still block the overwrite"
     );
     plant_confirmed_spend(&q, first.compute_txid().to_byte_array(), fk);
-    let msg = check(&q);
+    let msg = check(&q, true);
     assert!(
         msg.is_empty(),
         "unspendable outputs are not coins, got {msg}"
+    );
+    assert!(
+        check(&q, false).contains("invariant: write create txids length"),
+        "ordered validation must require every prevalidated create identity"
     );
     let _ = std::fs::remove_dir_all(&path);
 }
