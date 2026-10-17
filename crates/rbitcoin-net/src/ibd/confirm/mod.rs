@@ -1834,6 +1834,10 @@ pub(crate) mod confirm_thr_stats {
         rbitcoin_query::note_confirm_dur(&stats.thr_write_recv_wait_ns, d);
     }
     #[inline]
+    pub fn add_write_merge(stats: &rbitcoin_query::ConfirmStats, d: Duration) {
+        rbitcoin_query::note_confirm_dur(&stats.thr_write_merge_ns, d);
+    }
+    #[inline]
     pub fn add_write_work(stats: &rbitcoin_query::ConfirmStats, d: Duration) {
         rbitcoin_query::note_confirm_dur(&stats.thr_write_work_ns, d);
     }
@@ -1911,6 +1915,8 @@ pub(crate) fn spawn_confirm_engine(
                         Err(_) => break,
                     },
                 };
+                confirm_thr_stats::add_write_recv_wait(&stats, t_recv.elapsed());
+                let t_merge = Instant::now();
                 let (batch, parts, next_left) = drain_script_ok_write_queue(
                     first,
                     &write_rx,
@@ -1923,7 +1929,7 @@ pub(crate) fn spawn_confirm_engine(
                     },
                 );
                 leftover = next_left;
-                confirm_thr_stats::add_write_recv_wait(&stats, t_recv.elapsed());
+                confirm_thr_stats::add_write_merge(&stats, t_merge.elapsed());
                 if feed_wb.stopped() || hub_wb.query.confirm_cancelled() {
                     break;
                 }

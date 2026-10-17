@@ -145,6 +145,7 @@ confirm_window! {
     idx_asm_ns,
     idx_put_ns,
     ensure_layout_ns,
+    ensure_abs_ns,
     write_class_c_join_ns,
     write_drain_join_ns,
     write_dequeue_ns,
@@ -254,6 +255,7 @@ confirm_window! {
     arch_write_total_ns,
     arch_write_reserve_ns,
     arch_write_body_ns,
+    arch_write_encode_ns,
     arch_write_head_ns,
     arch_write_spend_ns,
     arch_write_htxs_ns,
@@ -304,6 +306,7 @@ confirm_window! {
     thr_script_work_ns,
     thr_script_send_wait_ns,
     thr_write_recv_wait_ns,
+    thr_write_merge_ns,
     thr_write_work_ns,
     height_index_full_n,
     height_index_full_headers,
@@ -492,6 +495,10 @@ impl ConfirmStats {
 
     pub fn note_write_overlay(&self, ns: u64) {
         add(&self.arch_write_overlay_ns, ns);
+    }
+
+    pub fn note_write_encode(&self, ns: u64) {
+        add(&self.arch_write_encode_ns, ns);
     }
 
     fn miss_on_code(on: Option<&str>) -> u64 {

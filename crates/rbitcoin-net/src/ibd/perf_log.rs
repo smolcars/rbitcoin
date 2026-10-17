@@ -43,7 +43,9 @@
 //!   until both waves have finished executing.
 //! - **write** = Class A + ensure + structural + class_c + spend
 //!   + `pins=` / `head_sub=` / `drain_join=` / `dequeue=` / `idx_put=`.
-//!     `other=` is write-thread work minus that inventory.
+//!     `other=` is write-thread work minus that inventory. Merging the
+//!     drained writeq parts is `thr_write_merge_ms`: write-thread CPU before
+//!     the batch's work wall, not recv wait.
 //!
 //! **Inventory:** write-stage names live on [`WriteStageSample`]. A new counter
 //! is a field on [`IbdPerfSample`]; JSON includes it because the struct
@@ -185,6 +187,8 @@ pub(crate) struct IbdPerfSample {
     /// Ensure mix: residency/pin hits vs cold denserels body loads.
     pub ensure_res_hit: u64,
     pub ensure_cold_n: u64,
+    /// `ensure=` part: spend abs job walk after the layout fill.
+    pub ensure_abs_ms: u64,
     /// `pins=` part: planned_fks clone + pin Arc vec before Class A.
     pub pins_take_ms: u64,
     /// `pins=` part: write_create_pins FkMap insert after Class A.
@@ -351,6 +355,8 @@ pub(crate) struct IbdPerfSample {
     pub thr_script_work_ms: u64,
     pub thr_script_send_wait_ms: u64,
     pub thr_write_recv_wait_ms: u64,
+    /// Merging the drained writeq parts into one batch (not wait).
+    pub thr_write_merge_ms: u64,
     pub thr_write_work_ms: u64,
     pub plan_blks: u64,
     pub plan_ms: u64,
@@ -426,6 +432,8 @@ pub(crate) struct IbdPerfSample {
     pub arch_write_total_ms: u64,
     pub arch_write_reserve_ms: u64,
     pub arch_write_body_ms: u64,
+    /// `arch_write_body` part: Class A row encode before the pwrite wave.
+    pub arch_write_encode_ms: u64,
     pub arch_write_head_ms: u64,
     pub arch_write_spend_ms: u64,
     pub arch_write_htxs_ms: u64,
@@ -483,6 +491,7 @@ impl Default for IbdPerfSample {
             write: WriteStageSample::default(),
             ensure_res_hit: 0,
             ensure_cold_n: 0,
+            ensure_abs_ms: 0,
             pins_take_ms: 0,
             pins_map_ms: 0,
             asm_prevout_ms: 0,
@@ -599,6 +608,7 @@ impl Default for IbdPerfSample {
             thr_script_work_ms: 0,
             thr_script_send_wait_ms: 0,
             thr_write_recv_wait_ms: 0,
+            thr_write_merge_ms: 0,
             thr_write_work_ms: 0,
             plan_blks: 0,
             plan_ms: 0,
@@ -659,6 +669,7 @@ impl Default for IbdPerfSample {
             arch_write_total_ms: 0,
             arch_write_reserve_ms: 0,
             arch_write_body_ms: 0,
+            arch_write_encode_ms: 0,
             arch_write_head_ms: 0,
             arch_write_spend_ms: 0,
             arch_write_htxs_ms: 0,
@@ -977,6 +988,7 @@ pub(crate) fn sample(
         },
         ensure_res_hit,
         ensure_cold_n,
+        ensure_abs_ms: ns_ms(w.ensure_abs_ns),
         pins_take_ms: ns_ms(pins_take_ns),
         pins_map_ms: ns_ms(pins_map_ns),
         asm_prevout_ms: ns_ms(asm_prevout_ns),
@@ -1093,6 +1105,7 @@ pub(crate) fn sample(
         thr_script_work_ms: ns_ms(w.thr_script_work_ns),
         thr_script_send_wait_ms: ns_ms(w.thr_script_send_wait_ns),
         thr_write_recv_wait_ms: ns_ms(w.thr_write_recv_wait_ns),
+        thr_write_merge_ms: ns_ms(w.thr_write_merge_ns),
         thr_write_work_ms: ns_ms(w.thr_write_work_ns),
         plan_blks: w.lookup_blocks,
         plan_ms: ns_ms(w.lookup_total_ns),
@@ -1153,6 +1166,7 @@ pub(crate) fn sample(
         arch_write_total_ms: ns_ms(w.arch_write_total_ns),
         arch_write_reserve_ms: ns_ms(w.arch_write_reserve_ns),
         arch_write_body_ms: ns_ms(w.arch_write_body_ns),
+        arch_write_encode_ms: ns_ms(w.arch_write_encode_ns),
         arch_write_head_ms: ns_ms(w.arch_write_head_ns),
         arch_write_spend_ms: ns_ms(w.arch_write_spend_ns),
         arch_write_htxs_ms: ns_ms(w.arch_write_htxs_ns),
@@ -1378,7 +1392,7 @@ mod tests {
         assert!(!progress.contains('{'), "{progress}");
     }
 
-    const SAMPLE_FIELDS: &str = "inflight,inflight_cap,bq_bytes,bq_count,bq_soft_stop,buf_ahead,hole,peers,headers_done,confirm_ms,confirm_blocks,confirm_reject_stops,confirm_us_per_block,assign_ms,assign_issued,drain_ms,drain_events,status_scan_ms,dominant,live,phase_blks,connect_ms,script_ms,idx_asm_ms,write,ensure_res_hit,ensure_cold_n,pins_take_ms,pins_map_ms,asm_prevout_ms,asm_sigop_ms,asm_final_ms,asm_job_ms,asm_in_n,asm_prev_batch_n,asm_prev_same_n,asm_prev_cold_n,asm_cold_null_fk_n,asm_cold_not_pin_n,asm_cold_txid_mismatch_n,asm_cold_vout_miss_n,strong_ms,structural_spent_ms,spent_abs_ms,spent_strong_ms,spent_cold_ms,spent_pending_ms,structural_create_h_ms,structural_bip68_ms,spend_ranged,ann_ms,ann_n,ann_pread_skip,ann_sync_ms,spend_replay_ms,meta_ms,meta_n,ovl_n,load_ms,prep_wire_arc_ms,prep_struct_ms,prep_header_ms,prep_header_skip_n,prep_prepare_ms,prep_filter_plan_ms,connect_ns,script_ns,milestone_gate_ns,strong_ns,tip_ns,structural_spent_ns,structural_create_h_ns,structural_bip68_ns,load_ns,sh_runs,wf_body_store,wf_store_body_ms,sh_collect_ms,sh_sort_ms,sh_seed_ms,sh_body_ms,sh_head_ms,sh_collect_pin,sh_collect_cold,load_win_ms,load_blocks,load_utxo_parents,load_parent_unique,load_pin_cache_body,load_pin_plan,load_pin_new,load_pin_body_ms,load_plan_pin_ms,load_pin_range_fill_ms,load_pin_recent_outs_ms,load_pin_contract_ms,load_cold_io_ms,load_cold_range_ms,load_cold_range_n,load_cold_range_body_ms,load_cold_range_decode_ms,load_cold_range_extend_n,load_cold_range_body_sqe_n,load_cold_range_guess_full_n,load_body_tx_reads,conf_ready,conf_script_q,conf_write_q,conf_script_q_cap,conf_write_q_cap,conf_script_q_hwm,conf_write_q_hwm,thr_lookup_claim_ms,thr_lookup_stamp_ms,thr_lookup_other_ms,thr_lookup_send_wait_ms,stamp_struct_ms,stamp_struct_txid_ms,stamp_struct_walk_ms,stamp_prepare_ms,stamp_filter_ms,stamp_batch_ms,stamp_batch_assign_ms,stamp_batch_collect_ms,stamp_batch_head_ms,stamp_batch_head_fk_ms,stamp_batch_stamp_ms,stamp_batch_finish_ms,thr_load_recv_wait_ms,thr_load_pack_ms,thr_load_clone_ms,thr_load_stamp_ms,thr_load_pin_ms,thr_load_asm_ms,thr_load_prune_ms,thr_load_reject_ms,thr_load_send_wait_ms,script_jobs,script_skip,thr_script_recv_wait_ms,thr_script_work_ms,thr_script_send_wait_ms,thr_write_recv_wait_ms,thr_write_work_ms,plan_blks,plan_ms,plan_collect_ms,plan_head_ms,plan_cold_io_ms,lookup_decode_ms,lookup_precompute_ms,lookup_wave_head_ms,lookup_wave_head_probe_ms,lookup_wave_head_io_ms,lookup_wave_head_preads,lookup_wave_spent_ms,plan_parents,plan_already,plan_cold,plan_same_batch,load_thin_ms,load_parent_pin_ms,arch_ext_need,arch_head_need,arch_head_hit,leftover_pend,leftover_cdf0_pct,leftover_cdf3_pct,leftover_age_n,arch_pin_txid,arch_pin_txid_ms,arch_recent_n,arch_recent_ms,arch_batch_stamp,arch_resolve_ns,arch_resolve_blocks,arch_prep_assign_ms,arch_prep_collect_ms,arch_prep_inflight_ms,arch_prep_head_ms,arch_prep_head_fk_ms,arch_prep_probe_ms,arch_prep_idx_ms,arch_prep_body_txid_ms,arch_prep_head_keys,arch_prep_head_cands,arch_prep_hit_rank_avg_x100,arch_prep_hit_rank_n,arch_prep_miss_peeks,arch_prep_pending_hits,arch_prep_age_cdf0_pct,arch_prep_age_cdf3_pct,arch_prep_age_cdf7_pct,arch_prep_age_cdf15_pct,arch_prep_age_cdf31_pct,arch_prep_age_hit_compact,arch_prep_age_hit_n,arch_prep_body_lookups,arch_prep_stamp_ms,arch_prep_finish_ms,arch_write_total_ms,arch_write_reserve_ms,arch_write_body_ms,arch_write_head_ms,arch_write_spend_ms,arch_write_htxs_ms,arch_write_txstat_ms,arch_write_overlay_ms,arch_write_flush_ms,arch_write_blocks,rss_kb,rss_anon_kb,rss_file_kb,vm_hwm_kb,rss_locked_kb,work,owned,conf_pipe,uring_recover_n,uring_slow_drain,lookup_faults";
+    const SAMPLE_FIELDS: &str = "inflight,inflight_cap,bq_bytes,bq_count,bq_soft_stop,buf_ahead,hole,peers,headers_done,confirm_ms,confirm_blocks,confirm_reject_stops,confirm_us_per_block,assign_ms,assign_issued,drain_ms,drain_events,status_scan_ms,dominant,live,phase_blks,connect_ms,script_ms,idx_asm_ms,write,ensure_res_hit,ensure_cold_n,ensure_abs_ms,pins_take_ms,pins_map_ms,asm_prevout_ms,asm_sigop_ms,asm_final_ms,asm_job_ms,asm_in_n,asm_prev_batch_n,asm_prev_same_n,asm_prev_cold_n,asm_cold_null_fk_n,asm_cold_not_pin_n,asm_cold_txid_mismatch_n,asm_cold_vout_miss_n,strong_ms,structural_spent_ms,spent_abs_ms,spent_strong_ms,spent_cold_ms,spent_pending_ms,structural_create_h_ms,structural_bip68_ms,spend_ranged,ann_ms,ann_n,ann_pread_skip,ann_sync_ms,spend_replay_ms,meta_ms,meta_n,ovl_n,load_ms,prep_wire_arc_ms,prep_struct_ms,prep_header_ms,prep_header_skip_n,prep_prepare_ms,prep_filter_plan_ms,connect_ns,script_ns,milestone_gate_ns,strong_ns,tip_ns,structural_spent_ns,structural_create_h_ns,structural_bip68_ns,load_ns,sh_runs,wf_body_store,wf_store_body_ms,sh_collect_ms,sh_sort_ms,sh_seed_ms,sh_body_ms,sh_head_ms,sh_collect_pin,sh_collect_cold,load_win_ms,load_blocks,load_utxo_parents,load_parent_unique,load_pin_cache_body,load_pin_plan,load_pin_new,load_pin_body_ms,load_plan_pin_ms,load_pin_range_fill_ms,load_pin_recent_outs_ms,load_pin_contract_ms,load_cold_io_ms,load_cold_range_ms,load_cold_range_n,load_cold_range_body_ms,load_cold_range_decode_ms,load_cold_range_extend_n,load_cold_range_body_sqe_n,load_cold_range_guess_full_n,load_body_tx_reads,conf_ready,conf_script_q,conf_write_q,conf_script_q_cap,conf_write_q_cap,conf_script_q_hwm,conf_write_q_hwm,thr_lookup_claim_ms,thr_lookup_stamp_ms,thr_lookup_other_ms,thr_lookup_send_wait_ms,stamp_struct_ms,stamp_struct_txid_ms,stamp_struct_walk_ms,stamp_prepare_ms,stamp_filter_ms,stamp_batch_ms,stamp_batch_assign_ms,stamp_batch_collect_ms,stamp_batch_head_ms,stamp_batch_head_fk_ms,stamp_batch_stamp_ms,stamp_batch_finish_ms,thr_load_recv_wait_ms,thr_load_pack_ms,thr_load_clone_ms,thr_load_stamp_ms,thr_load_pin_ms,thr_load_asm_ms,thr_load_prune_ms,thr_load_reject_ms,thr_load_send_wait_ms,script_jobs,script_skip,thr_script_recv_wait_ms,thr_script_work_ms,thr_script_send_wait_ms,thr_write_recv_wait_ms,thr_write_merge_ms,thr_write_work_ms,plan_blks,plan_ms,plan_collect_ms,plan_head_ms,plan_cold_io_ms,lookup_decode_ms,lookup_precompute_ms,lookup_wave_head_ms,lookup_wave_head_probe_ms,lookup_wave_head_io_ms,lookup_wave_head_preads,lookup_wave_spent_ms,plan_parents,plan_already,plan_cold,plan_same_batch,load_thin_ms,load_parent_pin_ms,arch_ext_need,arch_head_need,arch_head_hit,leftover_pend,leftover_cdf0_pct,leftover_cdf3_pct,leftover_age_n,arch_pin_txid,arch_pin_txid_ms,arch_recent_n,arch_recent_ms,arch_batch_stamp,arch_resolve_ns,arch_resolve_blocks,arch_prep_assign_ms,arch_prep_collect_ms,arch_prep_inflight_ms,arch_prep_head_ms,arch_prep_head_fk_ms,arch_prep_probe_ms,arch_prep_idx_ms,arch_prep_body_txid_ms,arch_prep_head_keys,arch_prep_head_cands,arch_prep_hit_rank_avg_x100,arch_prep_hit_rank_n,arch_prep_miss_peeks,arch_prep_pending_hits,arch_prep_age_cdf0_pct,arch_prep_age_cdf3_pct,arch_prep_age_cdf7_pct,arch_prep_age_cdf15_pct,arch_prep_age_cdf31_pct,arch_prep_age_hit_compact,arch_prep_age_hit_n,arch_prep_body_lookups,arch_prep_stamp_ms,arch_prep_finish_ms,arch_write_total_ms,arch_write_reserve_ms,arch_write_body_ms,arch_write_encode_ms,arch_write_head_ms,arch_write_spend_ms,arch_write_htxs_ms,arch_write_txstat_ms,arch_write_overlay_ms,arch_write_flush_ms,arch_write_blocks,rss_kb,rss_anon_kb,rss_file_kb,vm_hwm_kb,rss_locked_kb,work,owned,conf_pipe,uring_recover_n,uring_slow_drain,lookup_faults";
 
     #[test]
     fn write_inventory_stage_ms_sums_the_table() {

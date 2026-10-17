@@ -1394,6 +1394,8 @@ impl Query {
             |i, buf| encode_plan_row_seqsigwit(&plan, i, buf, &secret),
         )?;
         let body_ns = t.elapsed().as_nanos() as u64;
+        self.confirm_stats()
+            .note_write_encode(self.store.txs.take_class_a_encode_ns());
         if got_tx_fks.len() != plan.packed.len() {
             return Err(StoreError::Corrupt("tx put_full_batch length"));
         }

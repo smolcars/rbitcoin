@@ -258,9 +258,11 @@ fn write_phase(
         plan_take_ns,
         create_map_ns,
     } = apply_archive_plan(query, batch)?;
-    let t_ens = Instant::now();
+    let t_abs = Instant::now();
     let abs_jobs = super::collect_spend_abs_after_fill(&batch.batch_parents, &batch.prepared)?;
-    ensure_ns = ensure_ns.saturating_add(t_ens.elapsed().as_nanos() as u64);
+    let abs_ns = t_abs.elapsed().as_nanos() as u64;
+    ensure_ns = ensure_ns.saturating_add(abs_ns);
+    rbitcoin_query::note_confirm(&query.confirm_stats().ensure_abs_ns, abs_ns);
     if class_a_ns > 0 {
         rbitcoin_query::note_confirm(&query.confirm_stats().class_a_ns, class_a_ns);
     }

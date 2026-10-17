@@ -664,6 +664,8 @@ pub struct TxTable {
     /// machines decode raw spans and are not counted. One Relaxed add per
     /// decode.
     body_decodes: std::sync::atomic::AtomicU64,
+    /// Class A row encode nanoseconds before the append pwrite wave.
+    class_a_encode_ns: std::sync::atomic::AtomicU64,
 }
 
 /// Structural-meta backend from env hierarchy.
@@ -981,6 +983,7 @@ impl TxTable {
             secret,
             pending_head: pending_head::PendingHeadInserts::new(),
             body_decodes: std::sync::atomic::AtomicU64::new(0),
+            class_a_encode_ns: std::sync::atomic::AtomicU64::new(0),
             rebuild_seal_bits: seal_bits,
             rebuild_workers: workers,
             prune_seqsigwit_mode: std::sync::atomic::AtomicBool::new(false),
@@ -1214,6 +1217,7 @@ impl TxTable {
             secret,
             pending_head: pending_head::PendingHeadInserts::new(),
             body_decodes: std::sync::atomic::AtomicU64::new(0),
+            class_a_encode_ns: std::sync::atomic::AtomicU64::new(0),
             rebuild_seal_bits: seal_bits,
             rebuild_workers: workers,
             prune_seqsigwit_mode: std::sync::atomic::AtomicBool::new(prune_seqsigwit_mode),
@@ -2264,6 +2268,19 @@ impl TxTable {
             .swap(0, std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Class A encode time since the last take (the append writer reads it).
+    pub fn take_class_a_encode_ns(&self) -> u64 {
+        self.class_a_encode_ns
+            .swap(0, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn note_class_a_encode(&self, since: std::time::Instant) {
+        self.class_a_encode_ns.fetch_add(
+            since.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
     /// Walk create_fks `first..=last` from a coalesced `txout.body` span (one idx
     /// walk, sequential body pread), yielding `script_hash` per out.
     ///
@@ -2588,6 +2605,7 @@ impl TxTable {
         if n_outs.len() != n {
             return Err(StoreError::Corrupt("invariant: create n_out"));
         }
+        let t_encode = std::time::Instant::now();
         let Some(p_out) = self.body.prepare_batch_encode(n, est_out, encode_out)? else {
             return Ok((Vec::new(), Vec::new()));
         };
@@ -2613,6 +2631,7 @@ impl TxTable {
         }
 
         if self.prune_seqsigwit_mode() {
+            self.note_class_a_encode(t_encode);
             crate::var_table::write_prepared_bodies_one_wave(
                 &[(&self.body, &p_out), (&self.spent, &p_sp)],
                 self.datadir_hdd(),
@@ -2634,6 +2653,7 @@ impl TxTable {
         else {
             return Err(StoreError::Corrupt("Class A seqsigwit prepare empty"));
         };
+        self.note_class_a_encode(t_encode);
         crate::var_table::write_prepared_bodies_one_wave(
             &[
                 (&self.body, &p_out),
