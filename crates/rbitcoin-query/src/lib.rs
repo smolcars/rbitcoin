@@ -354,7 +354,7 @@ impl ShWriteBehind {
 
 /// Domain query facade used by higher layers (consensus, net, RPC).
 pub struct Query {
-    store: Store,
+    store: Arc<Store>,
     /// When false, confirm skips durable spend-annotation writes.
     spend_index: std::sync::atomic::AtomicBool,
     /// When false, archive skips durable `tx.head` inserts.
@@ -439,6 +439,8 @@ pub struct Query {
     /// Held from the tip-height check through `flush_class_c_tip` / disconnect
     /// flush. Rewind tries it and retries; it does not disconnect mid-flush.
     tip_commit: Mutex<()>,
+    /// IBD tip flush still running on `rbtc-tip-flush`. The next `tip_commit` taker joins it.
+    tip_flush: Mutex<Option<std::thread::JoinHandle<Result<(), StoreError>>>>,
     /// Confirm / archive / load window meters (`ibd: perf`). One instance per Query.
     confirm_stats: Arc<ConfirmStats>,
     /// Tip height of last in-process io_uring recover (`u32::MAX` = none).
@@ -548,7 +550,7 @@ impl Query {
         // and nothing is queued: the drain starts there.
         let head_drained = store.txs.head_last_inserted_fk();
         let q = Self {
-            store,
+            store: Arc::new(store),
             spend_index: std::sync::atomic::AtomicBool::new(true),
             tx_index: std::sync::atomic::AtomicBool::new(true),
             sh: ShWriteBehind::new(),
@@ -587,6 +589,7 @@ impl Query {
             sh_runs_published: AtomicUsize::new(0),
             owned_sizes_published: arc_swap::ArcSwap::from_pointee(ProcessOwnedSizes::default()),
             tip_commit: Mutex::new(()),
+            tip_flush: Mutex::new(None),
             confirm_stats: Arc::new(ConfirmStats::default()),
             uring_recover_tip: AtomicU32::new(u32::MAX),
             pruneheight: AtomicU32::new(ph),
@@ -1405,6 +1408,7 @@ impl Query {
     ///
     /// See [`rbitcoin_store::Store::flush_for_shutdown`].
     pub fn flush_for_shutdown(&self) -> Result<(), QueryError> {
+        let _commit = self.lock_tip_commit()?;
         self.store.flush_for_shutdown()
     }
 }

@@ -97,18 +97,45 @@ impl Query {
     }
 
     /// Block until the in-flight tip flush or disconnect releases the commit.
-    pub fn lock_tip_commit(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.tip_commit.lock().unwrap_or_else(|e| e.into_inner())
+    pub fn lock_tip_commit(&self) -> Result<std::sync::MutexGuard<'_, ()>, QueryError> {
+        let g = self.tip_commit.lock().unwrap_or_else(|e| e.into_inner());
+        self.join_tip_flush()?;
+        Ok(g)
+    }
+
+    fn join_tip_flush(&self) -> Result<(), QueryError> {
+        let pending = self
+            .tip_flush
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        match pending {
+            None => Ok(()),
+            Some(h) => h
+                .join()
+                .unwrap_or(Err(StoreError::Corrupt("tip flush thread panicked"))),
+        }
     }
 
     /// `None` while a confirm flush or disconnect holds the commit.
     /// Rewind uses this so the orchestration task does not wait on that disk.
     pub fn try_lock_tip_commit(&self) -> Option<std::sync::MutexGuard<'_, ()>> {
-        match self.tip_commit.try_lock() {
-            Ok(g) => Some(g),
-            Err(std::sync::TryLockError::Poisoned(p)) => Some(p.into_inner()),
-            Err(std::sync::TryLockError::WouldBlock) => None,
+        let g = match self.tip_commit.try_lock() {
+            Ok(g) => g,
+            Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        let running = self
+            .tip_flush
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|h| !h.is_finished());
+        // A finished flush joins without waiting; its error stays for the next blocking taker.
+        if running || self.join_tip_flush().is_err() {
+            return None;
         }
+        Some(g)
     }
 
     /// One header read at open, so the first orchestration pass does not
@@ -251,7 +278,7 @@ impl Query {
         if items.is_empty() {
             return Ok(Vec::new());
         }
-        let commit = self.lock_tip_commit();
+        let commit = self.lock_tip_commit()?;
         for w in items.windows(2) {
             if w[1].height.0 != w[0].height.0.saturating_add(1) {
                 return Err(StoreError::Corrupt("confirm run not contiguous heights"));
@@ -336,7 +363,18 @@ impl Query {
         // L2 write-behind barrier: complete-or-fail Class C image to disk **before**
         // callers dequeue the body queue. Kill after this returns → tip durable;
         // kill before → BQ still holds blocks for re-drive.
-        self.store.flush_class_c_tip()?;
+        if self.index_mode()?.is_tip() {
+            self.store.flush_class_c_tip()?;
+        } else {
+            // IBD: batch N+1's Class A and checks overlap this flush; its own
+            // Class C commit joins it first.
+            let store = Arc::clone(&self.store);
+            let h = std::thread::Builder::new()
+                .name("rbtc-tip-flush".into())
+                .spawn(move || store.flush_class_c_tip())
+                .map_err(|e| StoreError::io(std::path::Path::new("rbtc-tip-flush"), e))?;
+            *self.tip_flush.lock().unwrap_or_else(|e| e.into_inner()) = Some(h);
+        }
         drop(commit);
         crate::note_confirm(
             &self.confirm_stats().tip_ns,
@@ -857,7 +895,7 @@ impl Query {
     /// Logs [`format_disconnect_tip_line`] at **warn** before the scripthash
     /// unlink and again after the tip shrink commits.
     pub fn disconnect_tip(&self) -> Result<(), QueryError> {
-        let _commit = self.lock_tip_commit();
+        let _commit = self.lock_tip_commit()?;
         self.disconnect_tip_body(true)
     }
 
@@ -869,7 +907,7 @@ impl Query {
 
     /// Class C disconnect without dropping RAM SH pending (reorg reaccept first).
     pub fn disconnect_tip_keep_pending(&self) -> Result<(), QueryError> {
-        let _commit = self.lock_tip_commit();
+        let _commit = self.lock_tip_commit()?;
         self.disconnect_tip_body(false)
     }
 
