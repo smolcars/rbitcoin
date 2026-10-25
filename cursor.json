@@ -1,0 +1,14 @@
+{
+  "new_base": "7aa60737961c44cc0dc04737cba77a831b8358f6",
+  "new_skip": 0,
+  "old_index": 181,
+  "old_name": "crates/rbitcoin-consensus/src/block/mod.rs:420:15: replace += with -= in last_script_push",
+  "new_cap_used": false,
+  "run_id": "40165102683",
+  "new_len": 91,
+  "old_len": 30844,
+  "new_remaining": 0,
+  "old_remaining": 30663,
+  "completed_new": 91,
+  "completed_old": 181
+}
